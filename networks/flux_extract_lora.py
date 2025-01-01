@@ -33,6 +33,12 @@ def save_to_file(file_name, state_dict, metadata, dtype):
 
     save_file(state_dict, file_name, metadata=metadata)
 
+def normalize_key(key):
+    """Generate standardized keys, removing the model.diffusion_model. prefix if present."""
+    prefix = "model.diffusion_model."
+    if key.startswith(prefix):
+        return key[len(prefix):]
+    return key
 
 def svd(
     model_org=None,
@@ -71,6 +77,7 @@ def svd(
     with open_fn(model_org) as f_org:
         # filter keys
         keys = []
+        normalized_keys = set()
         for key in f_org.keys():
             if not ("single_block" in key or "double_block" in key):
                 continue
@@ -79,12 +86,36 @@ def svd(
             if "norm" in key:
                 continue
             keys.append(key)
+            normalized_keys.add(normalize_key(key))
 
         with open_fn(model_tuned) as f_tuned:
+            # filter keys
+            keys2 = set()
+            normalized_keys2 = set()
+            for key in f_tuned.keys():
+                if not ("single_block" in key or "double_block" in key):
+                    continue
+                if ".bias" in key:
+                    continue
+                if "norm" in key:
+                    continue
+                keys2.add(key)
+                normalized_keys2.add(normalize_key(key))
+
             for key in tqdm(keys):
+                normalized_key = normalize_key(key)
+                if not (normalized_key in normalized_keys2):
+                    continue
                 # get tensors and calculate difference
                 value_o = f_org.get_tensor(key)
-                value_t = f_tuned.get_tensor(key)
+                # Checks both the original key and the prefixed key if the corresponding key exists in the model
+                corresponding_key = key if key in keys2 else f"model.diffusion_model.{normalized_key}"
+                if corresponding_key in keys2:
+                    value_t = f_tuned.get_tensor(corresponding_key)
+                else:
+                    # Checks both the original key and the prefixed key if the corresponding key exists in the model
+                    continue
+
                 mat = value_t.to(calc_dtype) - value_o.to(calc_dtype)
                 del value_o, value_t
 
